@@ -1,10 +1,10 @@
 #include "bt_bridge.h"
 #include "config.h"
 #include "sensor_hub.h"
+#include "payload.h"
 
 #include <BluetoothSerial.h>
 #include <ArduinoJson.h>
-#include <math.h>
 
 #if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
 #error "Bluetooth is not enabled in this build. Use a board variant with Bluedroid."
@@ -15,25 +15,26 @@ namespace {
     uint32_t        s_last_broadcast_ms = 0;
     bool            s_was_client_up     = false;
     String          s_rx_line;
-
-    void serialize_status(char* out, size_t cap, size_t& written) {
-        LifelinkState st = sensor_hub::get();
-        JsonDocument doc;
-        doc["device"] = LIFELINK_DEVICE_ID;
-        if (!isnan(st.temperature)) doc["temp"] = roundf(st.temperature * 10.0f) / 10.0f;
-        if (!isnan(st.humidity))    doc["humi"] = roundf(st.humidity    * 10.0f) / 10.0f;
-        doc["gas"]   = (long)roundf(st.gas_ppm);
-        doc["alarm"] = st.gas_alarm ? 1 : 0;
-        written = serializeJson(doc, out, cap);
-    }
+    uint32_t        s_tx_count          = 0;
+    uint32_t        s_tx_bytes          = 0;
 
     void send_status_line() {
         char buf[256];
-        size_t n = 0;
-        serialize_status(buf, sizeof(buf) - 2, n);
+        size_t n = payload::serialize_status(buf, sizeof(buf) - 2);
+        if (n == 0) return;
         buf[n++] = '\n';
         buf[n]   = '\0';
-        s_bt.write((const uint8_t*)buf, n);
+        size_t written = s_bt.write((const uint8_t*)buf, n);
+        s_tx_count++;
+        s_tx_bytes += written;
+        // One log line every 10th frame so we can see traffic is flowing
+        // without spamming serial. If you see this line but the phone shows
+        // no telemetry, the problem is on the Android side.
+        if ((s_tx_count % 10) == 1) {
+            Serial.printf("[bt] tx #%lu  (%u/%u bytes, total %lu bytes since boot)\n",
+                          (unsigned long)s_tx_count, (unsigned)written, (unsigned)n,
+                          (unsigned long)s_tx_bytes);
+        }
     }
 
     void handle_command(const String& cmd) {
@@ -45,23 +46,45 @@ namespace {
             // Latching is sensor-side; ack only.
             s_bt.println("{\"ack\":\"alarm_reset\"}");
         } else if (cmd.length() > 0) {
-            s_bt.print("{\"error\":\"unknown\",\"cmd\":\"");
-            s_bt.print(cmd);
-            s_bt.println("\"}");
+            // ArduinoJson handles quote-escaping so a malicious or weird
+            // inbound command can't malform our reply JSON.
+            JsonDocument doc;
+            doc["error"] = "unknown";
+            doc["cmd"]   = cmd.c_str();
+            char out[96];
+            size_t n = serializeJson(doc, out, sizeof(out));
+            out[n++] = '\n';
+            s_bt.write((const uint8_t*)out, n);
         }
     }
 
     void bt_event(esp_spp_cb_event_t event, esp_spp_cb_param_t* /*param*/) {
         switch (event) {
+            case ESP_SPP_INIT_EVT:
+                Serial.println(F("[bt] SPP_INIT — Bluedroid stack ready"));
+                break;
+            case ESP_SPP_START_EVT:
+                Serial.println(F("[bt] SPP_START — server up; phone can now connect"));
+                break;
             case ESP_SPP_SRV_OPEN_EVT:
                 sensor_hub::set_bt_client(true);
-                log_i("BT: client connected");
+                Serial.println(F("[bt] SPP_SRV_OPEN — *** client CONNECTED ***"));
                 break;
             case ESP_SPP_CLOSE_EVT:
                 sensor_hub::set_bt_client(false);
-                log_i("BT: client disconnected");
+                Serial.println(F("[bt] SPP_CLOSE — client disconnected"));
+                break;
+            case ESP_SPP_DATA_IND_EVT:
+                // Inbound data — drained by service_tick() reading s_bt.available().
+                break;
+            case ESP_SPP_WRITE_EVT:
+                // Outbound complete — too noisy to log per-write.
+                break;
+            case ESP_SPP_CONG_EVT:
+                Serial.println(F("[bt] SPP_CONG — TX congested (phone not draining)"));
                 break;
             default:
+                Serial.printf("[bt] SPP event %d (unhandled)\n", (int)event);
                 break;
         }
     }

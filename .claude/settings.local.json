@@ -7,7 +7,8 @@
       "Bash(export PATH=\"$JAVA_HOME/bin:$PATH\")",
       "Bash(./gradlew --no-daemon -q lintDebug)",
       "Bash(./gradlew --no-daemon -q assembleDebug)",
-      "Bash(/c/Users/sam10/.platformio/penv/Scripts/pio.exe run *)"
+      "Bash(/c/Users/sam10/.platformio/penv/Scripts/pio.exe run *)",
+      "Bash(./gradlew --no-daemon -q assembleDebug lintDebug)"
     ]
   }
 }

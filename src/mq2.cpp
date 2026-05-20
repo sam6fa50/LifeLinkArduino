@@ -14,15 +14,21 @@ static constexpr float    MQ2_PPM_MAX        = 10000.0f;
 static constexpr float    MQ2_R0_MIN_OK      = 0.5f;     // kΩ
 static constexpr float    MQ2_R0_MAX_OK      = 200.0f;   // kΩ
 static constexpr float    MQ2_R0_DEFAULT     = 10.0f;    // datasheet-typical
-static constexpr int      MQ2_ADC_SATURATED  = 3900;     // ~94 % of 4095
 static constexpr uint16_t MQ2_MAX_CALIB_N    = 128;
 
-MQ2::MQ2(uint8_t aout_pin, uint8_t dout_pin)
-    : _aout_pin(aout_pin), _dout_pin(dout_pin), _r0(MQ2_R0_DEFAULT) {}
+// Per-call oversampling. Each read_rs() takes this many quick ADC samples
+// and averages the ones that aren't obvious artifacts. raw==0 and raw==4095
+// are ADC corner-case noise on ESP32, not real sensor values — the MQ-2's
+// physical thermal mass can't change resistance that fast.
+static constexpr int      MQ2_OVERSAMPLE_N   = 8;
+static constexpr int      MQ2_ADC_NOISE_LOW  = 10;
+static constexpr int      MQ2_ADC_NOISE_HIGH = 4085;
+
+MQ2::MQ2(uint8_t aout_pin)
+    : _aout_pin(aout_pin), _r0(MQ2_R0_DEFAULT) {}
 
 void MQ2::begin() {
     pinMode(_aout_pin, INPUT);
-    pinMode(_dout_pin, INPUT);
     analogReadResolution(12);                  // 0–4095
     analogSetPinAttenuation(_aout_pin, ADC_11db); // ~0–3.3 V usable range
 }
@@ -31,15 +37,25 @@ int MQ2::read_raw_adc() {
     return analogRead(_aout_pin);
 }
 
-bool MQ2::saturated() {
-    return read_raw_adc() >= MQ2_ADC_SATURATED;
-}
-
 float MQ2::read_rs() {
-    int raw = analogRead(_aout_pin);
+    long sum = 0;
+    int  kept = 0;
+    for (int i = 0; i < MQ2_OVERSAMPLE_N; i++) {
+        int r = analogRead(_aout_pin);
+        if (r >= MQ2_ADC_NOISE_LOW && r <= MQ2_ADC_NOISE_HIGH) {
+            sum += r;
+            kept++;
+        }
+    }
+    // If every sample was an outlier (sensor disconnected, AOUT shorted),
+    // re-use the last good RS so the median filter doesn't get poisoned.
+    if (kept == 0) return _last_rs;
+
+    int raw = (int)(sum / kept);
     float v = (raw / 4095.0f) * 3.3f;
     if (v < 0.001f) v = 0.001f;                // avoid div-by-zero
-    return ((3.3f - v) / v) * LIFELINK_MQ2_RL_KOHM;
+    _last_rs = ((3.3f - v) / v) * LIFELINK_MQ2_RL_KOHM;
+    return _last_rs;
 }
 
 // ── Calibration ─────────────────────────────────────────────────────────────
@@ -136,8 +152,4 @@ float MQ2::read_ppm() {
     if (ppm < 0.0f || !isfinite(ppm)) ppm = 0.0f;
     if (ppm > MQ2_PPM_MAX)            ppm = MQ2_PPM_MAX;
     return ppm;
-}
-
-bool MQ2::digital_alarm() {
-    return digitalRead(_dout_pin) == LOW;       // DOUT is active-LOW
 }

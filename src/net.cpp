@@ -1,11 +1,10 @@
 #include "net.h"
 #include "config.h"
 #include "sensor_hub.h"
+#include "payload.h"
 
 #include <WiFi.h>
 #include <PubSubClient.h>
-#include <ArduinoJson.h>
-#include <math.h>
 
 namespace {
     WiFiClient    s_wifi_client;
@@ -115,25 +114,15 @@ void service_tick() {
 void publish_now() {
     if (!s_mqtt.connected()) return;
 
-    LifelinkState st = sensor_hub::get();
-
-    JsonDocument doc;
-    doc["device"] = LIFELINK_DEVICE_ID;
-    if (!isnan(st.temperature)) doc["temp"] = roundf(st.temperature * 10.0f) / 10.0f;
-    if (!isnan(st.humidity))    doc["humi"] = roundf(st.humidity    * 10.0f) / 10.0f;
-    doc["gas"]   = (long)roundf(st.gas_ppm);
-    doc["alarm"] = st.gas_alarm ? 1 : 0;
-
-    char payload[256];
-    size_t n = serializeJson(doc, payload, sizeof(payload));
-    s_mqtt.publish(LIFELINK_MQTT_TOPIC_STATUS, (const uint8_t*)payload, n, false);
+    char buf[256];
+    const size_t n = payload::serialize_status(buf, sizeof(buf));
+    if (n == 0) return;
+    s_mqtt.publish(LIFELINK_MQTT_TOPIC_STATUS, (const uint8_t*)buf, n, false);
 
     // Retained, single-byte alarm flag — matches lifelink-firmware contract.
+    const LifelinkState st = sensor_hub::get();
     const char* alert_val = st.gas_alarm ? "1" : "0";
     s_mqtt.publish(LIFELINK_MQTT_TOPIC_ALERT, (const uint8_t*)alert_val, 1, true);
 }
-
-bool wifi_up() { return WiFi.status() == WL_CONNECTED; }
-bool mqtt_up() { return s_mqtt.connected(); }
 
 }  // namespace net

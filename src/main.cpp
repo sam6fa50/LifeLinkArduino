@@ -36,7 +36,7 @@ static Adafruit_SH1106G s_display(LIFELINK_OLED_W, LIFELINK_OLED_H, &SPI,
                                   LIFELINK_OLED_DC, LIFELINK_OLED_RST,
                                   LIFELINK_OLED_CS);
 static DHT              s_dht(LIFELINK_DHT_PIN, DHT11);
-static MQ2              s_mq2(LIFELINK_MQ2_AOUT_PIN, LIFELINK_MQ2_DOUT_PIN);
+static MQ2              s_mq2(LIFELINK_MQ2_AOUT_PIN);
 static bool             s_oled_ok = false;
 
 // DHT11 read-quality counters, updated by task_dht and surfaced on the
@@ -101,14 +101,23 @@ static void task_dht(void*) {
 
 static void task_mq2(void*) {
     TickType_t last = xTaskGetTickCount();
+    int  over_count = 0;
+    bool alarm_latched = false;
+    // Real gas events last seconds-to-minutes; ADC noise spikes last one
+    // sample. Asymmetric debounce: require N consecutive cycles above
+    // threshold to *set* the alarm, but a single cycle below clears it
+    // (fast to recover, slow to fire spuriously).
+    constexpr int OVER_CYCLES_TO_TRIP = 3;   // 3 × 500 ms = 1.5 s sustained
+
     for (;;) {
-        // Trust the analog reading only. The MQ-2 breakout's DOUT comparator
-        // is set by a sensitivity trimpot on the board, and on input-only
-        // GPIO 35 (no internal pull-up) a loose DOUT wire floats LOW —
-        // which would force alarm=1 forever. The analog ppm we already
-        // compute is the same information from a more reliable channel.
         const float ppm = s_mq2.read_ppm();
-        sensor_hub::set_gas(ppm, ppm > LIFELINK_GAS_ALARM_PPM);
+        if (ppm > LIFELINK_GAS_ALARM_PPM) {
+            if (++over_count >= OVER_CYCLES_TO_TRIP) alarm_latched = true;
+        } else {
+            over_count = 0;
+            alarm_latched = false;
+        }
+        sensor_hub::set_gas(ppm, alarm_latched);
         vTaskDelayUntil(&last, pdMS_TO_TICKS(LIFELINK_MQ2_PERIOD_MS));
     }
 }
@@ -187,8 +196,8 @@ void setup() {
 
     // ── MQ-2: warm-up countdown + R0 calibration in clean air ───────────
     s_mq2.begin();
-    Serial.printf("[mq2] ADC on GPIO %d, DOUT on GPIO %d — warming up %d s\n",
-                  LIFELINK_MQ2_AOUT_PIN, LIFELINK_MQ2_DOUT_PIN, LIFELINK_MQ2_WARMUP_S);
+    Serial.printf("[mq2] ADC on GPIO %d — warming up %d s\n",
+                  LIFELINK_MQ2_AOUT_PIN, LIFELINK_MQ2_WARMUP_S);
     for (int s = LIFELINK_MQ2_WARMUP_S; s > 0; s--) {
         oled_ui::show_warmup(s);
         if (s % 5 == 0 || s <= 5) {

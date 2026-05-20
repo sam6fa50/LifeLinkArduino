@@ -41,15 +41,17 @@ namespace {
         }
     }
 
+    // MQTT: 5×5 square. BT: 5×5 circle. Both filled when their respective
+    // link is up, outlined when down — same semantic, distinct silhouettes
+    // so a quick glance tells you which channel is alive.
     void draw_mqtt_icon(int x, int y, bool on) {
         if (on) g_d->fillRect(x, y, 5, 5, SH110X_WHITE);
         else    g_d->drawRect(x, y, 5, 5, SH110X_WHITE);
     }
 
     void draw_bt_icon(int x, int y, bool on) {
-        // tiny B glyph — filled when an SPP client is connected
-        if (on) g_d->fillRect(x, y, 5, 5, SH110X_WHITE);
-        else    g_d->drawRect(x, y, 5, 5, SH110X_WHITE);
+        if (on) g_d->fillCircle(x + 2, y + 2, 2, SH110X_WHITE);
+        else    g_d->drawCircle(x + 2, y + 2, 2, SH110X_WHITE);
     }
 }
 

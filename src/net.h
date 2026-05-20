@@ -17,7 +17,4 @@ void service_tick();
 // Latest sensor_hub snapshot → JSON status payload + retained alert flag.
 void publish_now();
 
-bool wifi_up();
-bool mqtt_up();
-
 }  // namespace net

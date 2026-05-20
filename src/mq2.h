@@ -8,7 +8,7 @@
 
 class MQ2 {
 public:
-    MQ2(uint8_t aout_pin, uint8_t dout_pin);
+    explicit MQ2(uint8_t aout_pin);
 
     void  begin();
     // Tries up to `max_attempts` times to derive a plausible R0. Each attempt
@@ -22,18 +22,16 @@ public:
 
     float read_rs();              // instantaneous RS in kΩ
     float read_ppm();             // median-filtered, clamped 0..10000 ppm
-    bool  digital_alarm();        // DOUT comparator — see note in main.cpp
     int   read_raw_adc();         // raw 0..4095 — for diagnostics
-    bool  saturated();            // true when the ADC is pinned near full-scale
 
     float r0() const             { return _r0; }
     bool  calibration_ok() const { return _calib_ok; }
 
 private:
     uint8_t _aout_pin;
-    uint8_t _dout_pin;
     float   _r0;
     bool    _calib_ok = false;
+    float   _last_rs  = 10.0f;   // last good RS, used when oversampling rejects all samples
 
     // 5-sample ring buffer of RS values, used by read_ppm() to smooth out
     // ADC jitter and slow thermal drift without hiding real gas events.

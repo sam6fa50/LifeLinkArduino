@@ -8,7 +8,7 @@
 // ─── Device identity ─────────────────────────────────────────────────────────
 #define LIFELINK_DEVICE_ID      "lifelink-001"
 // Classic-BT advertised name. Must start with "LifeLink" — the Android
-// companion app filters bonded devices by this prefix (see BluetoothBridge.java).
+// companion app filters bonded devices by this prefix (see BluetoothBridge.kt).
 #define LIFELINK_BT_NAME        "LifeLink-001"
 
 // ─── Wi-Fi credentials ───────────────────────────────────────────────────────
@@ -44,9 +44,10 @@
 #define LIFELINK_DHT_PIN        4
 
 // ─── MQ-2 gas sensor ─────────────────────────────────────────────────────────
-// GPIO 34/35 are input-only on ESP32 — ideal for ADC / digital threshold.
+// GPIO 34 is input-only on ESP32 — ideal for ADC. We don't wire DOUT:
+// its onboard comparator is redundant with the analog ppm calculation,
+// and a floating input-only GPIO would force false alarms.
 #define LIFELINK_MQ2_AOUT_PIN   34
-#define LIFELINK_MQ2_DOUT_PIN   35
 
 // Load resistor on the MQ-2 breakout (kΩ)
 #define LIFELINK_MQ2_RL_KOHM    10.0f
@@ -80,6 +81,5 @@
 #define LIFELINK_STACK_DHT       3072
 #define LIFELINK_STACK_MQ2       3072
 #define LIFELINK_STACK_DISPLAY   4096
-#define LIFELINK_STACK_MQTT      6144
 #define LIFELINK_STACK_BT        4096
 #define LIFELINK_STACK_NET       4096
