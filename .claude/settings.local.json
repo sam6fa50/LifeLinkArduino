@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(java -version 2>&1)",
+      "PowerShell($env:JAVA_HOME)",
+      "Bash(export JAVA_HOME=\"/c/Users/sam10/.jdks/openjdk-26.0.1\")",
+      "Bash(export PATH=\"$JAVA_HOME/bin:$PATH\")",
+      "Bash(./gradlew --no-daemon -q lintDebug)",
+      "Bash(./gradlew --no-daemon -q assembleDebug)",
+      "Bash(/c/Users/sam10/.platformio/penv/Scripts/pio.exe run *)"
+    ]
+  }
+}
