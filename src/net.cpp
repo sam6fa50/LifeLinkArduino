@@ -4,13 +4,17 @@
 #include "payload.h"
 
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <PubSubClient.h>
+#include <time.h>
 
 namespace {
-    WiFiClient    s_wifi_client;
+    WiFiClientSecure s_wifi_client;
     PubSubClient  s_mqtt(s_wifi_client);
     uint32_t      s_last_wifi_retry_ms = 0;
     uint32_t      s_last_mqtt_retry_ms = 0;
+    bool          s_mqtt_configured = false;
+    bool          s_time_sync_started = false;
 
     static constexpr uint32_t WIFI_RETRY_MS = 5000;
     static constexpr uint32_t MQTT_RETRY_MS = 3000;
@@ -58,6 +62,10 @@ namespace {
     }
 
     void ensure_mqtt() {
+        if (!s_mqtt_configured) {
+            sensor_hub::set_mqtt(false);
+            return;
+        }
         if (WiFi.status() != WL_CONNECTED) {
             sensor_hub::set_mqtt(false);
             return;
@@ -68,6 +76,14 @@ namespace {
         }
         sensor_hub::set_mqtt(false);
 
+        // TLS certificate validity needs a real clock. Start SNTP once without
+        // blocking the sensor tasks; never bypass certificate checks.
+        if (!s_time_sync_started) {
+            configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+            s_time_sync_started = true;
+        }
+        if (time(nullptr) < 1704067200) return;  // wait for a post-2024 clock
+
         uint32_t now = millis();
         if (now - s_last_mqtt_retry_ms < MQTT_RETRY_MS) return;
         s_last_mqtt_retry_ms = now;
@@ -76,6 +92,7 @@ namespace {
                       LIFELINK_MQTT_HOST, LIFELINK_MQTT_PORT, LIFELINK_DEVICE_ID);
         // last-will lets subscribers see the device disappear
         if (s_mqtt.connect(LIFELINK_DEVICE_ID,
+                           LIFELINK_MQTT_USERNAME, LIFELINK_MQTT_PASSWORD,
                            LIFELINK_MQTT_TOPIC_STATUS, 1, true,
                            "{\"device\":\"" LIFELINK_DEVICE_ID "\",\"online\":false}")) {
             Serial.println(F("[mqtt] CONNECTED — publishing online hello"));
@@ -103,6 +120,14 @@ void begin() {
     s_mqtt.setBufferSize(512);
     s_mqtt.setKeepAlive(30);
     s_mqtt.setSocketTimeout(10);
+    s_wifi_client.setHandshakeTimeout(10);
+    s_mqtt_configured = LIFELINK_MQTT_HOST[0] && LIFELINK_MQTT_USERNAME[0]
+                     && LIFELINK_MQTT_PASSWORD[0] && LIFELINK_MQTT_ROOT_CA[0];
+    if (s_mqtt_configured) {
+        s_wifi_client.setCACert(LIFELINK_MQTT_ROOT_CA);
+    } else {
+        Serial.println(F("[mqtt] disabled: configure a private TLS broker, credentials, and root CA in config_local.h."));
+    }
 }
 
 void service_tick() {

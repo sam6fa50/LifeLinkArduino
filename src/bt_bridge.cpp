@@ -43,17 +43,28 @@ namespace {
         } else if (cmd.equalsIgnoreCase("STATUS")) {
             send_status_line();
         } else if (cmd.equalsIgnoreCase("ALARM_RESET")) {
-            // Latching is sensor-side; ack only.
+            // Alarm state is managed by the sensor task; acknowledge only.
             s_bt.println("{\"ack\":\"alarm_reset\"}");
         } else if (cmd.length() > 0) {
-            // ArduinoJson handles quote-escaping so a malicious or weird
-            // inbound command can't malform our reply JSON.
+            // Escaping can make the reply longer than the incoming command.
+            // Reject oversized replies before serialization; keep space for
+            // the newline and null terminator.
             JsonDocument doc;
             doc["error"] = "unknown";
             doc["cmd"]   = cmd.c_str();
             char out[96];
-            size_t n = serializeJson(doc, out, sizeof(out));
+            const size_t required = measureJson(doc);
+            if (required > sizeof(out) - 2) {
+                s_bt.println("{\"error\":\"reply_too_large\"}");
+                return;
+            }
+            size_t n = serializeJson(doc, out, sizeof(out) - 1);
+            if (n != required) {
+                s_bt.println("{\"error\":\"serialization_failed\"}");
+                return;
+            }
             out[n++] = '\n';
+            out[n] = '\0';
             s_bt.write((const uint8_t*)out, n);
         }
     }

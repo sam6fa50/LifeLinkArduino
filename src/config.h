@@ -1,23 +1,47 @@
 #pragma once
 
+// Optional private settings; copy config_local.example.h to config_local.h.
+#if __has_include("config_local.h")
+#include "config_local.h"
+#endif
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  LifeLink Arduino firmware — central configuration
-//  Pins, intervals, MQ-2 curve constants, network credentials.
+//  Pins, intervals, MQ-2 curve constants, connection defaults.
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ─── Device identity ─────────────────────────────────────────────────────────
+#ifndef LIFELINK_DEVICE_ID
 #define LIFELINK_DEVICE_ID      "lifelink-001"
+#endif
 // Classic-BT advertised name. Must start with "LifeLink" — the Android
-// companion app filters bonded devices by this prefix (see BluetoothBridge.kt).
+// companion app filters bonded devices by this prefix.
 #define LIFELINK_BT_NAME        "LifeLink-001"
 
-// ─── Wi-Fi credentials ───────────────────────────────────────────────────────
-#define LIFELINK_WIFI_SSID      "Tessellator"
-#define LIFELINK_WIFI_PASSWORD  "@DingusCakes2008!"
+// Wi-Fi credentials: replace these placeholders with your hotspot/network details.
+#ifndef LIFELINK_WIFI_SSID
+#define LIFELINK_WIFI_SSID      "YOUR_WIFI_SSID"
+#endif
+#ifndef LIFELINK_WIFI_PASSWORD
+#define LIFELINK_WIFI_PASSWORD  "YOUR_WIFI_PASSWORD"
+#endif
 
-// ─── MQTT broker (default: HiveMQ public) ────────────────────────────────────
-#define LIFELINK_MQTT_HOST      "broker.hivemq.com"
-#define LIFELINK_MQTT_PORT      1883
+// Private MQTT broker over verified TLS only. Unconfigured MQTT stays disabled.
+#ifndef LIFELINK_MQTT_HOST
+#define LIFELINK_MQTT_HOST      ""
+#endif
+#ifndef LIFELINK_MQTT_PORT
+#define LIFELINK_MQTT_PORT      8883
+#endif
+#ifndef LIFELINK_MQTT_USERNAME
+#define LIFELINK_MQTT_USERNAME  ""
+#endif
+#ifndef LIFELINK_MQTT_PASSWORD
+#define LIFELINK_MQTT_PASSWORD  ""
+#endif
+#ifndef LIFELINK_MQTT_ROOT_CA
+#define LIFELINK_MQTT_ROOT_CA   ""
+#endif
 // Topics — match the JS dashboard subscription pattern `lifelink/+/status`
 #define LIFELINK_MQTT_TOPIC_STATUS  "lifelink/" LIFELINK_DEVICE_ID "/status"
 #define LIFELINK_MQTT_TOPIC_ALERT   "lifelink/" LIFELINK_DEVICE_ID "/alert"
@@ -60,7 +84,7 @@
 #define LIFELINK_MQ2_WARMUP_S   20
 // Samples averaged for R0
 #define LIFELINK_MQ2_CALIB_N    50
-// LPG-equivalent PPM at which the alarm latches on
+// LPG-equivalent PPM threshold for the debounced gas alarm
 #define LIFELINK_GAS_ALARM_PPM  500.0f
 
 // ─── Critical thresholds (full-screen flashing OLED warning) ─────────────────
@@ -82,4 +106,4 @@
 #define LIFELINK_STACK_MQ2       3072
 #define LIFELINK_STACK_DISPLAY   4096
 #define LIFELINK_STACK_BT        4096
-#define LIFELINK_STACK_NET       4096
+#define LIFELINK_STACK_NET       8192   // TLS handshakes need more stack than plaintext MQTT

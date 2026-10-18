@@ -1,16 +1,16 @@
 // ─────────────────────────────────────────────────────────────────────────────
-//  LifeLink — Arduino-CPP firmware for ESP32 (esp-wrover-kit)
+//  LifeLink — Arduino-CPP firmware for ESP32-WROOM (esp32dev)
 //
 //  Reads DHT11 (temp + humidity) and MQ-2 (LPG-equivalent gas ppm), shows a
 //  live dashboard on a 1.3" SH1106 OLED, publishes telemetry via MQTT
-//  (HiveMQ by default), and streams the same JSON over Classic-Bluetooth SPP
+//  (private broker over verified TLS), and streams the same JSON over Classic-Bluetooth SPP
 //  for the LifeLink Android companion.
 //
 //  Architecture mirrors the original esp-idf reference in lifelink-firmware/
 //  but uses Arduino libraries and FreeRTOS via xTaskCreatePinnedToCore.
 //
 //  The setup() routine is intentionally noisy on serial — every step prints
-//  what it tried and what it got, so a missing OLED / wrong I2C address /
+//  what it tried and what it got, so a missing OLED / incorrect SPI wiring /
 //  bad Wi-Fi credentials / failed BT stack init show up immediately when
 //  you `pio device monitor`. Each peripheral degrades to a no-op if its
 //  init fails, so a dead OLED never takes the radios down with it.
@@ -64,17 +64,18 @@ static void task_dht(void*) {
     for (;;) {
         float t = s_dht.readTemperature();
         float h = s_dht.readHumidity();
-        if (!isnan(t) && !isnan(h)) {
+        // Publish each new result, including failures, so stale values disappear.
+        const bool t_in_spec = isfinite(t) && t >= 0.0f && t <= 50.0f;
+        const bool h_in_spec = isfinite(h) && h >= 20.0f && h <= 90.0f;
+        sensor_hub::set_temp_humi(t_in_spec ? t : NAN, h_in_spec ? h : NAN);
+        if (isfinite(t) && isfinite(h)) {
             s_dht_ok++;
 
             // DHT11 datasheet: humidity 20-90 % RH, ±5 % accuracy. Outside
             // that range the sensor's noise floor dominates — publishing the
             // value would be asserting a false reading downstream. Push the
-            // valid temperature but mark humidity as unavailable (NaN); every
-            // consumer (OLED / MQTT JSON / BT JSON / Android dashboard)
-            // already renders NaN as a dash.
-            const bool h_in_spec = (h >= 20.0f && h <= 90.0f);
-            sensor_hub::set_temp_humi(t, h_in_spec ? h : NAN);
+            // valid temperature but mark humidity as unavailable (NaN); the OLED renders unavailable
+            // measurements as dashes and JSON sends null with validity flags.
 
             if (!h_in_spec) {
                 s_dht_out_of_spec++;
@@ -82,7 +83,7 @@ static void task_dht(void*) {
                     last_warn_h = h;
                     Serial.printf(
                         "[dht] WARN: humidity=%.0f%% is outside DHT11 spec range [20, 90]; "
-                        "suppressing — publishing as N/A. Temp=%.1fC still trusted. "
+                        "suppressing — publishing as N/A. Raw temp=%.1fC. "
                         "Likely causes: faulty humidity element (most common on cheap DHT11s), "
                         "missing 10kOhm pull-up on DATA, or loose DATA wire.\n", h, t);
                 }
@@ -111,8 +112,12 @@ static void task_mq2(void*) {
 
     for (;;) {
         const float ppm = s_mq2.read_ppm();
-        if (ppm > LIFELINK_GAS_ALARM_PPM) {
-            if (++over_count >= OVER_CYCLES_TO_TRIP) alarm_latched = true;
+        if (!isfinite(ppm)) {
+            over_count = 0;
+            // Missing/saturated input is a fault, not evidence that gas cleared.
+        } else if (ppm > LIFELINK_GAS_ALARM_PPM) {
+            if (over_count < OVER_CYCLES_TO_TRIP) ++over_count;
+            if (over_count >= OVER_CYCLES_TO_TRIP) alarm_latched = true;
         } else {
             over_count = 0;
             alarm_latched = false;
@@ -209,7 +214,7 @@ void setup() {
     oled_ui::show_calibrating();
     s_mq2.calibrate(LIFELINK_MQ2_CALIB_N);
     Serial.printf("[mq2] calibration %s — R0 = %.2f kOhm\n",
-                  s_mq2.calibration_ok() ? "OK" : "FELL BACK to default",
+                  s_mq2.calibration_ok() ? "OK" : "FAILED; gas unavailable",
                   s_mq2.r0());
 
     // ── Connectivity ────────────────────────────────────────────────────
@@ -251,7 +256,7 @@ void loop() {
             "alarm=%d crit=%d  wifi=%d mqtt=%d bt=%d oled=%d\n",
             st.temperature, st.humidity, st.gas_ppm,
             raw, rs, s_mq2.r0(),
-            s_mq2.calibration_ok() ? "ok" : "FALLBACK",
+            s_mq2.calibration_ok() ? "ok" : "FAILED",
             (unsigned)s_dht_ok, (unsigned)s_dht_fail, (unsigned)s_dht_out_of_spec,
             st.gas_alarm ? 1 : 0,
             oled_ui::is_critical(st) ? 1 : 0,

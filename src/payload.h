@@ -7,9 +7,10 @@
 // share this serializer so the payload schema lives in exactly one place.
 //
 // Output schema:
-//   { "device":"<id>", "temp":<°C>?, "humi":<%>?, "gas":<ppm>, "alarm":<0|1> }
+//   { "device":"<id>", "temp":<°C|null>, "humi":<%|null>, "gas":<ppm|null>, "alarm":<0|1> }
 //
-// `temp` and `humi` are omitted when the underlying sensor read is NaN.
+// Invalid/stale measurements are null. temp_valid, humi_valid and gas_valid
+// are explicit booleans; alarm is preserved during a gas sensor fault.
 
 namespace payload {
 

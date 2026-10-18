@@ -5,14 +5,14 @@
 // Classic-Bluetooth (SPP) bridge that streams JSON telemetry to the
 // LifeLink Android companion. The Android side enumerates bonded BR/EDR
 // devices and filters on names beginning with "LifeLink" — see
-// BluetoothBridge.java in the companion app. Once paired through the
+// the companion app. Once paired through the
 // system Bluetooth settings, the phone connects to this SPP server and
 // reads one JSON object per line.
 //
 // Inbound line protocol (one ASCII command per line):
 //   PING          → replies "PONG"
 //   STATUS        → replies with the latest JSON status frame
-//   ALARM_RESET   → currently a no-op acknowledgement (latching alarm is
+//   ALARM_RESET   → currently a no-op acknowledgement (alarm state is
 //                   sensor-driven; included so the Android side has a
 //                   forward-compatible hook)
 

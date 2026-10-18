@@ -8,8 +8,8 @@
 struct LifelinkState {
     float temperature   = NAN;     // °C  (NAN until first valid DHT read)
     float humidity      = NAN;     // %
-    float gas_ppm       = 0.0f;    // LPG-equivalent PPM
-    bool  gas_alarm     = false;   // true when ppm > threshold or DOUT active
+    float gas_ppm       = NAN;     // LPG-equivalent PPM; NAN until a valid, calibrated read
+    bool  gas_alarm     = false;   // invalid readings cannot clear an existing alarm
     bool  wifi_up       = false;
     bool  mqtt_up       = false;
     bool  bt_client_up  = false;   // SPP client is currently connected

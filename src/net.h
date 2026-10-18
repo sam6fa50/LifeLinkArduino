@@ -2,13 +2,13 @@
 
 #include <Arduino.h>
 
-// Wi-Fi + MQTT manager. Owns the WiFi STA and PubSubClient instances; runs
+// Wi-Fi + verified TLS MQTT manager. Owns WiFiClientSecure and PubSubClient; runs
 // reconnect logic on a single FreeRTOS task and publishes the current
 // sensor_hub snapshot every LIFELINK_MQTT_PERIOD_MS.
 
 namespace net {
 
-// Non-blocking — kicks off WiFi.begin() and creates the maintenance task.
+// Kicks off WiFi.begin() and configures MQTT; main.cpp starts the task.
 void begin();
 
 // Called periodically by the maintenance task; users normally don't invoke.

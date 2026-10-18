@@ -17,9 +17,8 @@ static constexpr float    MQ2_R0_DEFAULT     = 10.0f;    // datasheet-typical
 static constexpr uint16_t MQ2_MAX_CALIB_N    = 128;
 
 // Per-call oversampling. Each read_rs() takes this many quick ADC samples
-// and averages the ones that aren't obvious artifacts. raw==0 and raw==4095
-// are ADC corner-case noise on ESP32, not real sensor values — the MQ-2's
-// physical thermal mass can't change resistance that fast.
+// and averages the usable ones. Near-rail readings may mean saturation,
+// shorts, or disconnected wiring; report them as unavailable, never low gas.
 static constexpr int      MQ2_OVERSAMPLE_N   = 8;
 static constexpr int      MQ2_ADC_NOISE_LOW  = 10;
 static constexpr int      MQ2_ADC_NOISE_HIGH = 4085;
@@ -30,7 +29,7 @@ MQ2::MQ2(uint8_t aout_pin)
 void MQ2::begin() {
     pinMode(_aout_pin, INPUT);
     analogReadResolution(12);                  // 0–4095
-    analogSetPinAttenuation(_aout_pin, ADC_11db); // ~0–3.3 V usable range
+    analogSetPinAttenuation(_aout_pin, ADC_11db); // raw-count conversion below uses an approximate 3.3 V scale
 }
 
 int MQ2::read_raw_adc() {
@@ -47,15 +46,13 @@ float MQ2::read_rs() {
             kept++;
         }
     }
-    // If every sample was an outlier (sensor disconnected, AOUT shorted),
-    // re-use the last good RS so the median filter doesn't get poisoned.
-    if (kept == 0) return _last_rs;
+    // Require at least 6 of 8 usable samples. Never substitute an old value.
+    if (kept < 6) return NAN;
 
     int raw = (int)(sum / kept);
     float v = (raw / 4095.0f) * 3.3f;
-    if (v < 0.001f) v = 0.001f;                // avoid div-by-zero
-    _last_rs = ((3.3f - v) / v) * LIFELINK_MQ2_RL_KOHM;
-    return _last_rs;
+    const float rs = ((3.3f - v) / v) * LIFELINK_MQ2_RL_KOHM;
+    return isfinite(rs) && rs > 0.0f ? rs : NAN;
 }
 
 // ── Calibration ─────────────────────────────────────────────────────────────
@@ -63,8 +60,8 @@ float MQ2::read_rs() {
 // Each attempt averages the median RS over n_samples (~5 s at 100 ms each).
 // If the resulting R0 is plausible, we accept it; if not, we sleep
 // `retry_delay_ms` to let the heater finish warming up and try again.
-// A fresh MQ-2 can take 30–60 s of burn-in to settle; the retry loop adapts
-// to that without making every boot wait the full 60 s.
+// These retries are only a software startup sequence; they do not establish
+// that the sensor has completed manufacturer-specified conditioning.
 
 bool MQ2::calibrate(uint16_t n_samples,
                     uint8_t  max_attempts,
@@ -75,14 +72,17 @@ bool MQ2::calibrate(uint16_t n_samples,
 
     float samples[MQ2_MAX_CALIB_N];
     _calib_ok = false;
+    _rs_count = _rs_idx = 0;
 
-    for (uint8_t attempt = 1; attempt <= max_attempts; attempt++) {
+    for (uint16_t attempt = 1; attempt <= max_attempts; attempt++) {
+        uint16_t valid_count = 0;
         for (uint16_t i = 0; i < n_samples; i++) {
-            samples[i] = read_rs();
+            const float rs = read_rs();
+            if (isfinite(rs) && rs > 0.0f) samples[valid_count++] = rs;
             delay(100);
         }
         // Insertion sort — N ≤ 128 and this only runs at boot.
-        for (uint16_t i = 1; i < n_samples; i++) {
+        for (uint16_t i = 1; i < valid_count; i++) {
             float key = samples[i];
             int   j   = (int)i - 1;
             while (j >= 0 && samples[j] > key) {
@@ -91,7 +91,9 @@ bool MQ2::calibrate(uint16_t n_samples,
             }
             samples[j + 1] = key;
         }
-        const float median_rs    = samples[n_samples / 2];
+        // Reject an attempt with more than 20% unusable measurements.
+        const float median_rs = valid_count * 5 >= n_samples * 4
+                              ? samples[valid_count / 2] : NAN;
         const float r0_candidate = median_rs / LIFELINK_MQ2_CLEAN_AIR;
 
         if (r0_candidate >= MQ2_R0_MIN_OK && r0_candidate <= MQ2_R0_MAX_OK) {
@@ -115,9 +117,8 @@ bool MQ2::calibrate(uint16_t n_samples,
 
     _r0       = MQ2_R0_DEFAULT;
     _calib_ok = false;
-    Serial.printf("[mq2] all %u attempts failed — falling back to default R0 = %.1f kOhm. "
-                  "Live readings will still publish, but treat them as relative until "
-                  "the sensor has had more burn-in time.\n",
+    Serial.printf("[mq2] all %u attempts failed — default R0 = %.1f kOhm retained internally. "
+                  "Gas readings are unavailable; check the circuit and restart in clean air.\n",
                   max_attempts, MQ2_R0_DEFAULT);
     return false;
 }
@@ -144,12 +145,22 @@ float MQ2::_push_and_median(float rs) {
 }
 
 float MQ2::read_ppm() {
-    const float rs    = _push_and_median(read_rs());
+    const float current_rs = read_rs();
+    if (!_calib_ok || !isfinite(current_rs) || current_rs <= 0.0f) {
+        _rs_count = _rs_idx = 0;  // recovery must not reuse pre-failure readings
+        return NAN;
+    }
+    const float rs    = _push_and_median(current_rs);
     const float ratio = rs / _r0;
-    if (ratio <= 0.0f) return 0.0f;
+    if (!isfinite(ratio) || ratio <= 0.0f) return NAN;
+
+    // Saturate before powf can overflow; a high estimate must never become zero.
+    const float max_ratio = powf(MQ2_PPM_MAX / LIFELINK_MQ2_LPG_A,
+                                 1.0f / LIFELINK_MQ2_LPG_B);
+    if (ratio <= max_ratio) return MQ2_PPM_MAX;
 
     float ppm = LIFELINK_MQ2_LPG_A * powf(ratio, LIFELINK_MQ2_LPG_B);
-    if (ppm < 0.0f || !isfinite(ppm)) ppm = 0.0f;
+    if (ppm < 0.0f || !isfinite(ppm)) return NAN;
     if (ppm > MQ2_PPM_MAX)            ppm = MQ2_PPM_MAX;
     return ppm;
 }

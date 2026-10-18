@@ -5,7 +5,7 @@
 namespace {
     Adafruit_SH1106G* g_d = nullptr;
 
-    // Tracks the last polarity command we sent so we only hit the I2C bus
+    // Tracks the last polarity command we sent so we only hit the SPI bus
     // when the desired state actually changes.
     bool g_inverted = false;
 
@@ -117,31 +117,43 @@ void show_main(const LifelinkState& s) {
     // ── Row: Temperature + Humidity (y=16) ───────────────────────────────
     g_d->setCursor(0, 16);  g_d->print(F("Temp:"));
     g_d->setCursor(36, 16);
-    if (isnan(s.temperature)) g_d->print(F("--- C"));
+    if (!isfinite(s.temperature)) g_d->print(F("--- C"));
     else { snprintf(buf, sizeof(buf), "%.1fC", s.temperature); g_d->print(buf); }
 
     g_d->setCursor(72, 16); g_d->print(F("H:"));
     g_d->setCursor(86, 16);
-    if (isnan(s.humidity)) g_d->print(F("-- %"));
+    if (!isfinite(s.humidity)) g_d->print(F("-- %"));
     else { snprintf(buf, sizeof(buf), "%.0f%%", s.humidity); g_d->print(buf); }
 
     // ── Row: Gas PPM (y=24) ───────────────────────────────────────────────
     g_d->setCursor(0, 24); g_d->print(F("Gas:"));
-    snprintf(buf, sizeof(buf), "%.0f ppm", s.gas_ppm);
-    g_d->setCursor(30, 24); g_d->print(buf);
+    g_d->setCursor(30, 24);
+    if (isfinite(s.gas_ppm)) {
+        snprintf(buf, sizeof(buf), "%.0f ppm", s.gas_ppm);
+        g_d->print(buf);
+    } else {
+        g_d->print(F("UNAVAILABLE"));
+    }
 
     // ── Gas-level bar (y=33) ──────────────────────────────────────────────
-    float ratio = s.gas_ppm / LIFELINK_GAS_ALARM_PPM;
+    float ratio = isfinite(s.gas_ppm) ? s.gas_ppm / LIFELINK_GAS_ALARM_PPM : 0.0f;
     draw_progress(0, 33, 92, 7, ratio);
-    snprintf(buf, sizeof(buf), "%3.0f%%", (ratio > 1.0f ? 1.0f : ratio) * 100.0f);
-    g_d->setCursor(98, 32); g_d->print(buf);
+    g_d->setCursor(98, 32);
+    if (isfinite(s.gas_ppm)) {
+        snprintf(buf, sizeof(buf), "%3.0f%%", (ratio > 1.0f ? 1.0f : ratio) * 100.0f);
+        g_d->print(buf);
+    } else {
+        g_d->print(F("---"));
+    }
 
     g_d->drawFastHLine(0, 41, 128, SH110X_WHITE);
 
     // ── Alert row (y=48) ──────────────────────────────────────────────────
     g_d->setCursor(8, 48);
     if (s.gas_alarm) {
-        if (blink) g_d->print(F("!! GAS ALARM !!"));
+        if (blink) g_d->print(isfinite(s.gas_ppm) ? F("!! GAS ALARM !!") : F("ALARM / MQ-2 FAULT"));
+    } else if (!isfinite(s.gas_ppm) || !isfinite(s.temperature) || !isfinite(s.humidity)) {
+        g_d->print(F("SENSOR UNAVAILABLE"));
     } else {
         g_d->print(F("Status: OK"));
     }
@@ -156,9 +168,9 @@ void show_main(const LifelinkState& s) {
 
 bool is_critical(const LifelinkState& s) {
     const bool temp_critical =
-        !isnan(s.temperature) && s.temperature >= LIFELINK_TEMP_CRITICAL_C;
+        isfinite(s.temperature) && s.temperature >= LIFELINK_TEMP_CRITICAL_C;
     const bool gas_critical  =
-        s.gas_ppm >= LIFELINK_GAS_CRITICAL_PPM;
+        isfinite(s.gas_ppm) && s.gas_ppm >= LIFELINK_GAS_CRITICAL_PPM;
     return temp_critical || gas_critical;
 }
 
@@ -183,9 +195,9 @@ void show_critical(const LifelinkState& s) {
     // ── Offending readings (only the ones actually over threshold) ──────
     int y = 22;
     const bool temp_critical =
-        !isnan(s.temperature) && s.temperature >= LIFELINK_TEMP_CRITICAL_C;
+        isfinite(s.temperature) && s.temperature >= LIFELINK_TEMP_CRITICAL_C;
     const bool gas_critical  =
-        s.gas_ppm >= LIFELINK_GAS_CRITICAL_PPM;
+        isfinite(s.gas_ppm) && s.gas_ppm >= LIFELINK_GAS_CRITICAL_PPM;
 
     if (temp_critical) {
         snprintf(buf, sizeof(buf), "TEMP %.1f C  (>%.0f)",
